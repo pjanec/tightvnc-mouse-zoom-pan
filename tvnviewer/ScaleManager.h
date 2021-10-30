@@ -36,6 +36,14 @@ public:
   void setScreenResolution(int maxWidth, int maxHeight);
   // set the scale of image, for example, 10 - it means 10% from original
   void setScale(int scale);
+
+  // set the scale while keeping given center point on the same screen location
+  // (so we are zooming around given point - usually the mouse cursor)
+  void setScaleWithCenter(int scale, int xCenter, int yCenter);
+  
+  int getScale() { return m_scale; }
+  POINT getStartPos() { POINT p; p.x = m_xStart; p.y=m_yStart; return p; }
+
   // set the rectangle of window
   void setWindow(Rect *rcWnd);
 
@@ -50,7 +58,7 @@ public:
   int getHorzPoints() const;
 
   // set the current starting point
-  // point is scaled
+  // point is scaled  PJ: NOT ANY MORE!!! Hacked in favor of the mouse wheel zooming code...
   void setStartPoint(int x, int y);
 
   // get viewed rectangle

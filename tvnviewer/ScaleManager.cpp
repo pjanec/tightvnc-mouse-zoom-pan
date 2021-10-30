@@ -75,13 +75,36 @@ void ScaleManager::keepAspectRatio(Rect *rc) const
 void ScaleManager::setScale(int scale)
 {
   m_scale = scale;
-  setStartPoint(m_xStart, m_yStart);
+  // PJ FIXME
+  // we need the only place where we pan the view to be in the mouse zooming code
+  //setStartPoint(m_xStart, m_yStart);
+}
+
+void ScaleManager::setScaleWithCenter(int scale, int xCenter, int yCenter)
+{
+
+  float zoomCoef = (float) scale / m_scale; // how much we zoomed in
+  if( m_scale < 0 ) zoomCoef = 1;
+  //{ char buf[200]; sprintf(buf, "zoomCoef=%f, center x=%d, y=%d\n", zoomCoef, xCenter, yCenter); OutputDebugStringA(buf); }
+  // dist of center point from left/top border of our view
+  int left1 = xCenter - m_xStart;
+  int top1 = yCenter - m_yStart;
+
+  m_scale = scale;
+
+  // keep our centering point at same relative location in our view
+  int new_xStart = (int)(xCenter - (float) left1 / zoomCoef);
+  int new_yStart = (int)(yCenter - (float) top1 / zoomCoef);
+
+  setStartPoint(new_xStart, new_yStart);
 }
 
 void ScaleManager::setWindow(Rect *rcWnd)
 {
   m_rcWindow = rcWnd;
-  setStartPoint(m_xStart, m_yStart);
+  // PJ FIXME
+  // we need the only place where we pan the view to be in the mouse zooming code
+  //setStartPoint(m_xStart, m_yStart);
 }
 
 Rect ScaleManager::calcScaled(const Rect *rcViewed, bool bCent)
@@ -168,8 +191,12 @@ void ScaleManager::setStartPoint(int x, int y)
   int wndHeight = m_rcWindow.getHeight();
 
   if (m_scale != -1) {
-    x = x * DEFAULT_SCALE_DENOMERATOR / m_scale;
-    y = y * DEFAULT_SCALE_DENOMERATOR / m_scale;
+    // PJ FIXME
+    // This hack breaks the conventions on tightVNC...
+    // We want the new start point to be exactly the one set from the mouse zooming code (which does
+    // not count with scaling in this function)
+    //x = x * DEFAULT_SCALE_DENOMERATOR / m_scale;
+    //y = y * DEFAULT_SCALE_DENOMERATOR / m_scale;
 
     wndWidth = wndWidth * DEFAULT_SCALE_DENOMERATOR / m_scale;
     wndHeight = wndHeight * DEFAULT_SCALE_DENOMERATOR / m_scale;
@@ -179,6 +206,8 @@ void ScaleManager::setStartPoint(int x, int y)
     wndWidth = m_scrWidth;
     wndHeight = m_scrHeight;
  }
+
+    //{ char buf[200]; sprintf(buf, "StartPoint x=%d, y=%d\n", x, y); OutputDebugStringA(buf); }
 
   m_xStart = x;
   m_yStart = y;
@@ -203,6 +232,7 @@ void ScaleManager::setStartPoint(int x, int y)
   }
   Rect rcScaled = calcScaled(&m_rcViewed, true);
 }
+
 
 void ScaleManager::getViewedRect(Rect *rcViewed) const
 {

@@ -25,6 +25,7 @@
 #ifndef _DESKTOP_WINDOW_H_
 #define _DESKTOP_WINDOW_H_
 
+#include <functional>
 #include "win-system/WinClipboard.h"
 #include "gui/DibFrameBuffer.h"
 #include "region/Rect.h"
@@ -42,7 +43,9 @@ class DesktopWindow : public PaintWindow,
                       protected RfbKeySymListener
 {
 public:
-  DesktopWindow(LogWriter *logWriter, ConnectionConfig *conConf);
+  DesktopWindow(LogWriter *logWriter, ConnectionConfig *conConf,
+    std::function<bool(unsigned char mouseKeys, unsigned short wheelSpeed, POINT position)> onMouseCb
+  );
   virtual ~DesktopWindow();
 
   void setClipboardData(const StringStorage *strText);
@@ -54,6 +57,7 @@ public:
 
   // set scale of image, can -1 = Auto, in percent
   void setScale(int scale);
+  void setScaleCenterToMouseCursor(int scale);
   // it returns the image width and height considering scale
   Rect getViewerGeometry();
   // it returns the image width and height.
@@ -83,6 +87,13 @@ public:
   // Set function for m_winKeyIgnore.
   void setWinKeyIgnore(bool winKeyIgnore) { m_rfbKeySym->setWinKeyIgnore(winKeyIgnore); }
 
+  Point getMousePos() { return m_previousMousePos; }
+
+  void startDragging(POINT mousePos);
+  void stopDragging(POINT mousePos);
+  bool isDragging();
+  void doDragging(POINT mousePos);
+
 protected:
   //
   // Overrides RfbKeySymListener::onRfbKeySymEvent().
@@ -106,7 +117,12 @@ protected:
   bool onSize(WPARAM wParam, LPARAM lParam);
   bool onDestroy();
 
-  POINTS getViewerCoord(long xPos, long yPos);
+  // if clamp==false the coordinate returned will not be clamped to the viewer area
+  // (so it could become negative if input coordinate is above or on the left of the
+  // top left corner of the remote screen). This is used for mouse wheel zoom centering
+  // around mouse cursor pos (clamping might change the zooming center during the wheel zooming)
+  POINTS getViewerCoord(long xPos, long yPos, bool clamp=true);
+
   void calculateWndSize(bool isChanged);
   void applyScrollbarChanges(bool isChanged, bool isVert, bool isHorz, int wndWidth, int wndHeight);
 
@@ -128,6 +144,11 @@ protected:
   // This variable contained previously state of mouse-button and position of cursor.
   unsigned char m_previousMouseState;
   Point m_previousMousePos;
+
+  // our mouse cursor position in remote screen pixels, relative to top left corner of remote screen,
+  // not clamped into the remote screen rectangle (will be negative if on the left or above the remote screen),
+  // used as zoom center point
+  Point m_previousMousePosNoClamp;
 
   // scroll bars: vertical and horizontal
   ScrollBar m_sbar;
@@ -161,6 +182,14 @@ protected:
   RemoteViewerCore *m_viewerCore;
   ConnectionConfig *m_conConf;
   bool m_isBackgroundDirty;
+
+  bool m_isDragging;  // are we currently panning the view with the mouse?
+  Point m_dragStartViewStartPos; // scaleMgr.StartPos when started dragging
+  Point m_dragStartMousePos; // mouse desktop screen pos (local, not remote) when started dragging
+
+
+private:
+  std::function<bool(unsigned char mouseKeys, unsigned short wheelSpeed, POINT position)> m_onMouseCb;
 
 private:
   void doDraw(DeviceContext *dc);

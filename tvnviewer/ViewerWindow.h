@@ -129,6 +129,10 @@ protected:
   // else return rect of remote screen + border
   Rect calculateDefaultSize();
 
+  // called for mouse event detected by the DesktopWindow
+  // allows us to handle mouse events on the ViewerWindow level, in order to call commandScaleIn/Out etc.
+  bool onDesktopWindowMouse( unsigned char mouseKeys, unsigned short wheelSpeed, POINT position );
+
   LogWriter m_logWriter;
 
   Control m_control;

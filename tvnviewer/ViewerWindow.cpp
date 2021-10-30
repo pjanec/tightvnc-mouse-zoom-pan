@@ -47,23 +47,36 @@ ViewerWindow::ViewerWindow(WindowsApplication *application,
   m_viewerCore(0),
   m_fileTransfer(0),
   m_conData(conData),
-  m_dsktWnd(&m_logWriter, conConf),
+  m_dsktWnd(&m_logWriter, conConf,
+    [this](unsigned char mouseKeys, unsigned short wheelSpeed, POINT position)
+    {
+        return onDesktopWindowMouse(mouseKeys, wheelSpeed, position);
+    }),
   m_isConnected(false),
   m_sizeIsChanged(false),
   m_hooksEnabledFirstTime(true),
   m_requiresReconnect(false),
   m_stopped(false)
 {
-  m_standardScale.push_back(10);
-  m_standardScale.push_back(15);
-  m_standardScale.push_back(25);
-  m_standardScale.push_back(50);
-  m_standardScale.push_back(75);
-  m_standardScale.push_back(90);
-  m_standardScale.push_back(100);
-  m_standardScale.push_back(150);
-  m_standardScale.push_back(200);
-  m_standardScale.push_back(400);
+    // PJ FIXME
+    // we replace the irregular scale levels with uniform-stepped levels that are
+    // better suited for mouse wheel zooming
+  //m_standardScale.push_back(10);
+  //m_standardScale.push_back(15);
+  //m_standardScale.push_back(25);
+  //m_standardScale.push_back(50);
+  //m_standardScale.push_back(75);
+  //m_standardScale.push_back(90);
+  //m_standardScale.push_back(100);
+  //m_standardScale.push_back(150);
+  //m_standardScale.push_back(200);
+  //m_standardScale.push_back(400);
+    const float zoomStep = 1.2;
+    std::vector<int> shrink; for(float zoom=1; zoom > 0.1; zoom /= zoomStep ) shrink.push_back(zoom*100);
+    for(int i=shrink.size()-1; i > 1; i-- ) m_standardScale.push_back(shrink[i]);
+    std::vector<int> grow; for(float zoom=1; zoom < 4; zoom *= zoomStep ) grow.push_back(zoom*100);
+    for(int i=0; i < grow.size(); i++ ) m_standardScale.push_back(grow[i]);
+
 
   StringStorage windowClass = WindowNames::TVN_WINDOW_CLASS_NAME;
   StringStorage titleName = WindowNames::TVN_WINDOW_TITLE_NAME;
@@ -78,6 +91,8 @@ ViewerWindow::ViewerWindow(WindowsApplication *application,
                          getHWnd());
 
   SetTimer(m_hWnd, TIMER_DESKTOP_STATE, TIMER_DESKTOP_STATE_DELAY, (TIMERPROC)NULL);
+
+
 }
 
 ViewerWindow::~ViewerWindow()
@@ -211,7 +226,10 @@ void ViewerWindow::applySettings()
 
   if (scale != m_scale) {
     m_scale = scale;
-    m_dsktWnd.setScale(m_scale);
+    // we always center to the current mouse cursor, no matter if we clicked the toolbar button or
+    // did the zooming via mouse wheel (for simplicity; with the mouse no one actually needs to press
+    // the toolbar buttons...)
+    m_dsktWnd.setScaleCenterToMouseCursor(m_scale);
     doSize();
   }
   if (m_isConnected) {
@@ -1117,6 +1135,12 @@ void ViewerWindow::onConnected(RfbOutputGate *output)
   // Start viewer window and applying settings.
   showWindow();
   setForegroundWindow();
+  
+  // PJ FIXME (added)
+  // now when we completely disabled the scrollbar handling, the rendering/scaling
+  // is not initialized properly - we force it here
+  commandScaleAuto();
+
   applySettings();
 }
 
@@ -1262,3 +1286,58 @@ LRESULT ViewerWindow::onHookProc(int code, WPARAM wParam, LPARAM lParam)
     return false;
   }
 }
+
+bool ViewerWindow::onDesktopWindowMouse( unsigned char mouseButtons, unsigned short wheelSpeed, POINT position )
+{
+    // SHIFT+CTRL+ALT must be pressed in order to activate the mouse zoom/pan
+    bool shiftKeyPressed = GetAsyncKeyState( VK_SHIFT ) & 0x8000;
+    bool altKeyPressed = GetAsyncKeyState( VK_MENU ) & 0x8000;
+    bool ctrlKeyPressed = GetAsyncKeyState( VK_CONTROL ) & 0x8000;
+    //{ char buf[200]; sprintf(buf, "Shift=%d, Alt=%d, Ctrl=%d\n", shiftKeyPressed, altKeyPressed, ctrlKeyPressed); OutputDebugStringA(buf); }
+
+    if( shiftKeyPressed && altKeyPressed && ctrlKeyPressed )
+    {
+        if( mouseButtons & MOUSE_WUP )
+        {
+            m_sizeIsChanged = true; // avoid changing window size from now on
+            bool drag = m_dsktWnd.isDragging();
+            if( drag ) m_dsktWnd.stopDragging(position);
+            commandScaleIn();
+            if( drag ) m_dsktWnd.startDragging(position);
+            return true;
+        }
+        else
+        if( mouseButtons & MOUSE_WDOWN )
+        {
+            m_sizeIsChanged = true; // avoid changing window size from now on
+            bool drag = m_dsktWnd.isDragging();
+            if( drag ) m_dsktWnd.stopDragging(position);
+            commandScaleOut();
+            if( drag ) m_dsktWnd.startDragging(position);
+            return true;
+        }
+        else
+        if( mouseButtons & MOUSE_LDOWN )
+        {
+            m_sizeIsChanged = true; // avoid changing window size from now on
+            m_dsktWnd.startDragging(position);
+            m_dsktWnd.doDragging(position);
+            return true;
+        }
+    }
+
+    // stop dragging if no longer pressing left mouse button
+    if( !(mouseButtons & MOUSE_LDOWN) )
+    {
+        if( m_dsktWnd.isDragging() )
+        {
+            m_dsktWnd.stopDragging(position);
+            return true;
+        }
+    }
+
+
+    return false;
+}
+
+

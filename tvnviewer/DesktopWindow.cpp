@@ -24,7 +24,8 @@
 
 #include "DesktopWindow.h"
 
-DesktopWindow::DesktopWindow(LogWriter *logWriter, ConnectionConfig *conConf)
+DesktopWindow::DesktopWindow(LogWriter *logWriter, ConnectionConfig *conConf,
+    std::function<bool(unsigned char mouseKeys, unsigned short wheelSpeed, POINT position)> onMouseCb)
 : m_logWriter(logWriter),
   m_clipboard(0),
   m_showVert(false),
@@ -38,8 +39,11 @@ DesktopWindow::DesktopWindow(LogWriter *logWriter, ConnectionConfig *conConf)
   m_ctrlDown(false),
   m_altDown(false),
   m_previousMousePos(-1, -1),
+  m_previousMousePosNoClamp(-1, 1),
   m_previousMouseState(0),
-  m_isBackgroundDirty(false)
+  m_isBackgroundDirty(false),
+  m_isDragging(false),
+  m_onMouseCb( onMouseCb )
 {
   m_rfbKeySym = std::auto_ptr<RfbKeySym>(new RfbKeySym(this, m_logWriter));
 }
@@ -184,6 +188,23 @@ bool DesktopWindow::onVScroll(WPARAM wParam, LPARAM lParam)
 
 bool DesktopWindow::onMouse(unsigned char mouseButtons, unsigned short wheelSpeed, POINT position)
 {
+    // position = mouse coord in client area of viewer window
+    //{ char buf[200]; sprintf(buf, "DesktopWindow::onMouse x=%d, y=%d\n", position.x, position.y); OutputDebugStringA(buf); }
+
+  // mouse position in remote view coordinates relative to top left corner of remote frame buffer
+  POINTS mousePosNoClamp = getViewerCoord(position.x, position.y, false);
+  m_previousMousePosNoClamp.x = mousePosNoClamp.x;
+  m_previousMousePosNoClamp.y = mousePosNoClamp.y;
+  //{ char buf[200]; sprintf(buf, "mouseNoClamp x=%d, y=%d\n", mousePosNoClamp.x, mousePosNoClamp.y); OutputDebugStringA(buf); }
+
+  if( m_onMouseCb )
+  {
+    if( m_onMouseCb( mouseButtons, wheelSpeed, position ) )
+    {
+        return true;
+    }
+  }  
+
   // If mode is "view-only", then skip event.
   if (m_conConf->isViewOnly()) {
     return true;
@@ -206,6 +227,8 @@ bool DesktopWindow::onMouse(unsigned char mouseButtons, unsigned short wheelSpee
       mouseButtons |= MOUSE_MDOWN;
     }
   }
+
+
 
   // Translate coordinates from the Viewer Window to Desktop Window.
   POINTS mousePos = getViewerCoord(position.x, position.y);
@@ -326,7 +349,9 @@ void DesktopWindow::doDraw(DeviceContext *dc)
     return;
   }
 
-  scrollProcessing(fbWidth, fbHeight);
+  // PJ FIXME
+  // disabling scrollbar processing as it interferes with mouse wheel zooming
+  //scrollProcessing(fbWidth, fbHeight);
 
   int iHorzPos = 0; 
   int iVertPos = 0; 
@@ -339,7 +364,9 @@ void DesktopWindow::doDraw(DeviceContext *dc)
     iVertPos = m_sbar.getVertPos();
   }
 
-  m_scManager.setStartPoint(iHorzPos, iVertPos);
+  // PJ FIXME
+  // disabling scrollbar processing as it interferes with mouse wheel zooming
+  //m_scManager.setStartPoint(iHorzPos, iVertPos);
 
   Rect src, dst;
   m_scManager.getSourceRect(&src);
@@ -592,14 +619,33 @@ void DesktopWindow::setScale(int scale)
   }
 }
 
-POINTS DesktopWindow::getViewerCoord(long xPos, long yPos)
+void DesktopWindow::setScaleCenterToMouseCursor(int scale)
+{
+  AutoLock al(&m_bufferLock);
+
+  m_scManager.setScaleWithCenter(scale, m_previousMousePosNoClamp.x, m_previousMousePosNoClamp.y );
+  // update scroll bars to avoid returning the view back
+  m_sbar.setHorzPos( m_scManager.getStartPos().x );
+  m_sbar.setVertPos( m_scManager.getStartPos().y );
+
+  m_winResize = true;
+  // Invalidate all area of desktop window.
+  if (m_hWnd != 0) {
+    redraw();
+  }
+}
+
+
+POINTS DesktopWindow::getViewerCoord(long xPos, long yPos, bool clamp)
 {
   Rect rect;
   POINTS p;
 
   m_scManager.getDestinationRect(&rect);
   // it checks this point in the rect
-  if (!rect.isPointInRect(xPos, yPos)) {
+  if (!rect.isPointInRect(xPos, yPos)
+     && clamp // PJ FIXME - when calculating mouse position for zoom centering we do not want clamping
+  ) {
     p.x = -1;
     p.y = -1;
     return p;
@@ -731,3 +777,52 @@ void DesktopWindow::sendCutTextEvent(const StringStorage *cutText)
                         exception.getMessage());
   }
 }
+
+void DesktopWindow::startDragging(POINT mousePos)
+{
+    if( m_isDragging ) return;
+    m_isDragging = true;
+    POINT wiewStartPos = m_scManager.getStartPos();
+    m_dragStartViewStartPos.x = wiewStartPos.x;
+    m_dragStartViewStartPos.y = wiewStartPos.y;
+    m_dragStartMousePos.x = mousePos.x;
+    m_dragStartMousePos.y = mousePos.y;
+    //{ char buf[200]; sprintf(buf, "Started Dragging"); OutputDebugStringA(buf); }
+}
+
+void DesktopWindow::stopDragging(POINT mousePos)
+{
+    m_isDragging = false;
+}
+
+bool DesktopWindow::isDragging()
+{
+    return m_isDragging;
+}
+
+void DesktopWindow::doDragging(POINT mousePos)
+{
+    if( !m_isDragging ) return;
+
+    Point screenMouseDelta;
+    screenMouseDelta.x = mousePos.x - m_dragStartMousePos.x;
+    screenMouseDelta.y = mousePos.y - m_dragStartMousePos.y;
+
+    // convert our screen delta to the potentially scaled remote delta
+    float zoom = (float)m_scManager.getScale() / 100.f; if(zoom < 0 ) zoom = 1.f;
+    Point remoteMouseDelta;
+    remoteMouseDelta.x = (int)((float)(mousePos.x - m_dragStartMousePos.x) / zoom);
+    remoteMouseDelta.y = (int)((float)(mousePos.y - m_dragStartMousePos.y) / zoom);
+
+    //{ char buf[200]; sprintf(buf, "Dragging=%d, delta x=%d, y=%d\n", m_isDragging, remoteMouseDelta.x, remoteMouseDelta.y); OutputDebugStringA(buf); }
+
+    // move the view in the direction of the mouse movement
+    // (mouse to the right => view start point to the left to see the area more to the right)
+    m_scManager.setStartPoint( m_dragStartViewStartPos.x - remoteMouseDelta.x, m_dragStartViewStartPos.y - remoteMouseDelta.y  );
+
+  // Invalidate all area of desktop window.
+  if (m_hWnd != 0) {
+    redraw();
+  }
+}
+
